@@ -32,7 +32,7 @@ jira = JiraAPI(
     "https://delfia.atlassian.net"
 )
 
-# Campos: Loja, Cidade, Estado, Técnico, Ativo
+# Campos necessários da API do Jira
 FIELDS = (
     "summary,customfield_14954,customfield_14829,customfield_14825,"
     "customfield_12271,customfield_11993"
@@ -74,7 +74,7 @@ def get_latlon(endereco):
 
 df[["Latitude", "Longitude"]] = df["Endereco"].apply(get_latlon)
 
-# ── Filtros ─────────────────────────────────────────────────────────────
+# ── Filtros interativos ─────────────────────────────────────────────────
 st.sidebar.header("Filtros")
 estados = sorted(df["Estado"].dropna().unique())
 estado_sel = st.sidebar.multiselect("Estado", options=estados, default=estados)
@@ -87,25 +87,24 @@ df_filt = df[df["Estado"].isin(estado_sel) & df["Cidade"].isin(cidade_sel)]
 # ── Seleção de FSA ──────────────────────────────────────────────────────
 fsa_sel = st.sidebar.selectbox("🔍 Detalhes da FSA:", options=df_filt["Chamado"].unique())
 
-# ── Mapa interativo ─────────────────────────────────────────────────────
+# ── Mapa interativo com folium ─────────────────────────────────────────
 st.title("🗺️ Mapa de Chamados - Aguardando Spare")
 m = folium.Map(location=[-14, -52], zoom_start=4)
 
 for _, row in df_filt.iterrows():
     if pd.notnull(row["Latitude"]) and pd.notnull(row["Longitude"]):
-        color = "red"
         folium.CircleMarker(
             location=[row["Latitude"], row["Longitude"]],
             radius=6,
-            color=color,
+            color="red",
             fill=True,
-            fill_color=color,
+            fill_color="red",
             fill_opacity=0.8,
             popup=row["Chamado"]
         ).add_to(m)
 
 st_folium(m, width=900, height=600)
 
-# ── Detalhes do chamado selecionado ─────────────────────────────────────
+# ── Exibir detalhes do chamado selecionado ─────────────────────────────
 st.subheader(f"📄 Detalhes do Chamado: {fsa_sel}")
 st.dataframe(df_filt[df_filt["Chamado"] == fsa_sel])
