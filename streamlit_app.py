@@ -1,78 +1,94 @@
 import streamlit as st
 import pandas as pd
-import folium
-from streamlit_folium import st_folium
+import pydeck as pdk
+from collections import defaultdict
 from utils.jira_api import JiraAPI
 
-# ── Configuração ────────────────────────────────────────
-st.set_page_config(page_title="Mapa FSAs - Aguardando Spare", layout="wide")
+st.set_page_config(page_title="Mapa Chamados - Aguardando Spare", layout="wide")
+
+# ── Jira API ─────────────────────────
 jira = JiraAPI(
-    email=st.secrets["EMAIL"],
-    token=st.secrets["API_TOKEN"],
-    url="https://delfia.atlassian.net"
+    st.secrets["EMAIL"],
+    st.secrets["API_TOKEN"],
+    "https://delfia.atlassian.net"
 )
 
-def extrair_valor(campo):
-    if isinstance(campo, dict) and "value" in campo:
-        return campo["value"]
-    return campo if isinstance(campo, str) else ""
+# ── Buscar chamados ─────────────────
+FSA_FIELDS = (
+    "summary,customfield_14954,customfield_12374,"
+    "customfield_14825,customfield_11993,customfield_12279,"
+    "customfield_14829"
+)
 
-# ── Buscar chamados diretamente do Jira ─────────────────
 chamados = jira.buscar_chamados(
-    jql="project = FSA AND status = 'Aguardando Spare'",
-    fields="key,customfield_14954,customfield_11994,customfield_11993,customfield_12271,customfield_14829,customfield_12374"
+    'project = FSA AND status = "Aguardando Spare"',
+    FSA_FIELDS
 )
 
-# ── Criar DataFrame ─────────────────────────────────────
-df = pd.DataFrame([{
-    "Chamado": c["key"],
-    "Loja": c["fields"].get("customfield_14954", "—"),
-    "Cidade": extrair_valor(c["fields"].get("customfield_11994")),
-    "Estado": extrair_valor(c["fields"].get("customfield_11993")),
-    "Endereço": extrair_valor(c["fields"].get("customfield_12271")),
-    "CEP": c["fields"].get("customfield_14829", "—"),
-    "Técnico": extrair_valor(c["fields"].get("customfield_12374"))
-} for c in chamados])
+# ── Preparar DataFrame ──────────────
+dados = []
+for issue in chamados:
+    f = issue["fields"]
+    dados.append({
+        "Chamado": issue["key"],
+        "Loja": f.get("customfield_14954", {}).get("value", ""),
+        "Cidade": f.get("customfield_12374", {}).get("value", ""),
+        "Estado": f.get("customfield_14825", {}).get("value", ""),  # <- Aqui está o ESTADO corretamente
+        "Técnico": f.get("customfield_12279", {}).get("content", [{}])[0].get("content", [{}])[0].get("text", ""),
+        "Equipamento": f.get("summary", ""),
+        "Endereço": f.get("customfield_11993", ""),
+    })
 
-# ── Montar campo visual de endereço completo ─────────────
-df["Endereco"] = df["Endereço"] + ", " + df["Cidade"] + " - " + df["Estado"]
+df = pd.DataFrame(dados)
 
-# ── SIDEBAR com filtros ──────────────────────────────────
+# ── Sidebar de Filtros ───────────────
 with st.sidebar:
-    st.header("Filtros")
+    st.title("Filtros")
+
     estados = sorted(df["Estado"].dropna().unique())
-    estado_sel = st.multiselect("Estado", estados)
+    estado_sel = st.selectbox("Estado", ["Todos"] + estados)
 
-    cidades = sorted(df[df["Estado"].isin(estado_sel)]["Cidade"].dropna().unique()) if estado_sel else sorted(df["Cidade"].dropna().unique())
-    cidade_sel = st.multiselect("Cidade", cidades)
+    cidades = sorted(df["Cidade"].dropna().unique())
+    cidade_sel = st.selectbox("Cidade", ["Todos"] + cidades)
 
-    fsa_sel = st.selectbox("🔍 Detalhes da FSA:", df["Chamado"].unique())
+    fsa_sel = st.selectbox("🔎 Detalhes da FSA:", ["Selecione"] + df["Chamado"].tolist())
 
-# ── Aplicar filtros ao DataFrame ─────────────────────────
+# ── Aplicar filtros ──────────────────
 df_filtrado = df.copy()
-if estado_sel:
-    df_filtrado = df_filtrado[df_filtrado["Estado"].isin(estado_sel)]
-if cidade_sel:
-    df_filtrado = df_filtrado[df_filtrado["Cidade"].isin(cidade_sel)]
+if estado_sel != "Todos":
+    df_filtrado = df_filtrado[df_filtrado["Estado"] == estado_sel]
+if cidade_sel != "Todos":
+    df_filtrado = df_filtrado[df_filtrado["Cidade"] == cidade_sel]
 
-# ── MAPA ─────────────────────────────────────────────────
-st.title("📍 FSAs em Aguardando Spare")
+# ── Contagem por Endereço ────────────
+contagem = df_filtrado.groupby("Endereço").size().reset_index(name="Chamados")
 
-m = folium.Map(location=[-14.2, -51.9], zoom_start=4)
+# ── Mapa com Bolhas (fake lat/lon) ──
+contagem["lat"] = range(len(contagem))  # Fake lat
+contagem["lon"] = range(len(contagem))  # Fake lon
 
-for _, row in df_filtrado.iterrows():
-    folium.CircleMarker(
-        location=[-14.2, -51.9],  # posição simbólica
-        radius=6,
-        color="blue",
-        fill=True,
-        fill_opacity=0.8,
-        tooltip=row["Chamado"]
-    ).add_to(m)
+st.title("📍 Mapa de Chamados - Aguardando Spare")
 
-st_folium(m, height=500, width=1100)
+st.pydeck_chart(pdk.Deck(
+    map_style=None,
+    initial_view_state=pdk.ViewState(
+        latitude=0, longitude=0, zoom=2,
+    ),
+    layers=[
+        pdk.Layer(
+            "ScatterplotLayer",
+            data=contagem,
+            pickable=True,
+            get_position='[lon, lat]',
+            get_fill_color='[30, 136, 229, 160]',
+            get_radius="Chamados * 5000",
+        )
+    ],
+    tooltip={"text": "{Chamados} FSAs em {Endereço}"}
+))
 
-# ── Detalhes da FSA ──────────────────────────────────────
-st.subheader(f"📄 Detalhes do Chamado: {fsa_sel}")
-df_sel = df[df["Chamado"] == fsa_sel]
-st.dataframe(df_sel, use_container_width=True)
+# ── Mostrar Detalhes da FSA Selecionada ───
+if fsa_sel != "Selecione":
+    fsa_info = df[df["Chamado"] == fsa_sel]
+    st.markdown(f"### 📄 Detalhes do Chamado: `{fsa_sel}`")
+    st.dataframe(fsa_info.reset_index(drop=True))
