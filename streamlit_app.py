@@ -2,97 +2,77 @@ import streamlit as st
 import pandas as pd
 import folium
 from streamlit_folium import st_folium
-from geopy.geocoders import Nominatim
-from geopy.extra.rate_limiter import RateLimiter
 from utils.jira_api import JiraAPI
 
-# ── Configuração da página ─────────────────────────────────────────────
-st.set_page_config(page_title="Mapa de Chamados - Spare", layout="wide")
-
-# ── Conectar ao Jira ────────────────────────────────────────────────────
+# ── Configuração ────────────────────────────────────────
+st.set_page_config(page_title="Mapa FSAs - Aguardando Spare", layout="wide")
 jira = JiraAPI(
-    st.secrets["EMAIL"],
-    st.secrets["API_TOKEN"],
-    "https://delfia.atlassian.net"
+    email=st.secrets["EMAIL"],
+    token=st.secrets["API_TOKEN"],
+    url="https://delfia.atlassian.net"
 )
 
-# Campos necessários da API do Jira
-FIELDS = (
-    "summary,customfield_14954,customfield_14829,customfield_14825,"
-    "customfield_12271,customfield_11993"
+def extrair_valor(campo):
+    if isinstance(campo, dict) and "value" in campo:
+        return campo["value"]
+    return campo if isinstance(campo, str) else ""
+
+# ── Buscar chamados diretamente do Jira ─────────────────
+chamados = jira.buscar_chamados(
+    jql="project = FSA AND status = 'Aguardando Spare'",
+    fields="key,customfield_14954,customfield_11994,customfield_11993,customfield_12271,customfield_14829,customfield_12374"
 )
 
-# ── Buscar chamados com status 'Aguardando Spare' ───────────────────────
-query = 'project = FSA AND status = "Aguardando Spare"'
-chamados = jira.buscar_chamados(query, FIELDS)
+# ── Criar DataFrame ─────────────────────────────────────
+df = pd.DataFrame([{
+    "Chamado": c["key"],
+    "Loja": c["fields"].get("customfield_14954", "—"),
+    "Cidade": extrair_valor(c["fields"].get("customfield_11994")),
+    "Estado": extrair_valor(c["fields"].get("customfield_11993")),
+    "Endereço": extrair_valor(c["fields"].get("customfield_12271")),
+    "CEP": c["fields"].get("customfield_14829", "—"),
+    "Técnico": extrair_valor(c["fields"].get("customfield_12374"))
+} for c in chamados])
 
-if not chamados:
-    st.warning("Nenhum chamado encontrado com status 'Aguardando Spare'.")
-    st.stop()
+# ── Montar campo visual de endereço completo ─────────────
+df["Endereco"] = df["Endereço"] + ", " + df["Cidade"] + " - " + df["Estado"]
 
-# ── Transformar dados em DataFrame ──────────────────────────────────────
-def extrair(issue):
-    f = issue["fields"]
-    return {
-        "Chamado": issue["key"],
-        "Loja": f.get("customfield_14954", {}).get("value", ""),
-        "Cidade": f.get("customfield_14829", {}).get("value", ""),
-        "Estado": f.get("customfield_14825", {}).get("value", ""),
-        "Técnico": f.get("customfield_12271", ""),
-        "Equipamento": f.get("customfield_11993", ""),
-    }
+# ── SIDEBAR com filtros ──────────────────────────────────
+with st.sidebar:
+    st.header("Filtros")
+    estados = sorted(df["Estado"].dropna().unique())
+    estado_sel = st.multiselect("Estado", estados)
 
-df = pd.DataFrame([extrair(i) for i in chamados])
+    cidades = sorted(df[df["Estado"].isin(estado_sel)]["Cidade"].dropna().unique()) if estado_sel else sorted(df["Cidade"].dropna().unique())
+    cidade_sel = st.multiselect("Cidade", cidades)
 
-# Corrigir nulos e construir endereço para geolocalização
-df["Cidade"] = df["Cidade"].fillna("").astype(str)
-df["Estado"] = df["Estado"].fillna("").astype(str)
-df["Endereco"] = df["Cidade"] + ", " + df["Estado"]
+    fsa_sel = st.selectbox("🔍 Detalhes da FSA:", df["Chamado"].unique())
 
-# ── Geolocalização com cache ────────────────────────────────────────────
-geolocator = Nominatim(user_agent="geoapi")
-geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1)
+# ── Aplicar filtros ao DataFrame ─────────────────────────
+df_filtrado = df.copy()
+if estado_sel:
+    df_filtrado = df_filtrado[df_filtrado["Estado"].isin(estado_sel)]
+if cidade_sel:
+    df_filtrado = df_filtrado[df_filtrado["Cidade"].isin(cidade_sel)]
 
-@st.cache_data(show_spinner=False)
-def get_latlon(endereco):
-    location = geocode(endereco)
-    if location:
-        return pd.Series([location.latitude, location.longitude])
-    return pd.Series([None, None])
+# ── MAPA ─────────────────────────────────────────────────
+st.title("📍 FSAs em Aguardando Spare")
 
-df[["Latitude", "Longitude"]] = df["Endereco"].apply(get_latlon)
+m = folium.Map(location=[-14.2, -51.9], zoom_start=4)
 
-# ── Filtros interativos ─────────────────────────────────────────────────
-st.sidebar.header("Filtros")
-estados = sorted(df["Estado"].dropna().unique())
-estado_sel = st.sidebar.multiselect("Estado", options=estados, default=estados)
+for _, row in df_filtrado.iterrows():
+    folium.CircleMarker(
+        location=[-14.2, -51.9],  # posição simbólica
+        radius=6,
+        color="blue",
+        fill=True,
+        fill_opacity=0.8,
+        tooltip=row["Chamado"]
+    ).add_to(m)
 
-cidades = sorted(df[df["Estado"].isin(estado_sel)]["Cidade"].dropna().unique())
-cidade_sel = st.sidebar.multiselect("Cidade", options=cidades, default=cidades)
+st_folium(m, height=500, width=1100)
 
-df_filt = df[df["Estado"].isin(estado_sel) & df["Cidade"].isin(cidade_sel)]
-
-# ── Seleção de FSA ──────────────────────────────────────────────────────
-fsa_sel = st.sidebar.selectbox("🔍 Detalhes da FSA:", options=df_filt["Chamado"].unique())
-
-# ── Mapa interativo com folium ─────────────────────────────────────────
-st.title("🗺️ Mapa de Chamados - Aguardando Spare")
-m = folium.Map(location=[-14, -52], zoom_start=4)
-
-for _, row in df_filt.iterrows():
-    if pd.notnull(row["Latitude"]) and pd.notnull(row["Longitude"]):
-        folium.CircleMarker(
-            location=[row["Latitude"], row["Longitude"]],
-            radius=6,
-            color="red",
-            fill=True,
-            fill_color="red",
-            fill_opacity=0.8,
-            popup=row["Chamado"]
-        ).add_to(m)
-
-st_folium(m, width=900, height=600)
-
-# ── Exibir detalhes do chamado selecionado ─────────────────────────────
+# ── Detalhes da FSA ──────────────────────────────────────
 st.subheader(f"📄 Detalhes do Chamado: {fsa_sel}")
-st.dataframe(df_filt[df_filt["Chamado"] == fsa_sel])
+df_sel = df[df["Chamado"] == fsa_sel]
+st.dataframe(df_sel, use_container_width=True)
