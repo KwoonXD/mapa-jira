@@ -36,8 +36,8 @@ def extrair(issue):
     return {
         "Chamado": issue["key"],
         "Loja": f.get("customfield_14954", {}).get("value", ""),
-        "Cidade": f.get("customfield_14829", ""),
-        "Estado": f.get("customfield_14825", ""),
+        "Cidade": f.get("customfield_14829", {}).get("value", ""),
+        "Estado": f.get("customfield_14825", {}).get("value", ""),
         "Técnico": f.get("customfield_12271", ""),
         "Equipamento": f.get("customfield_11993", ""),
     }
