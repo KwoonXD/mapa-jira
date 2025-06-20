@@ -43,6 +43,10 @@ def extrair(issue):
     }
 
 df = pd.DataFrame([extrair(i) for i in chamados])
+
+# Corrigir nulos e construir endereço para geolocalização
+df["Cidade"] = df["Cidade"].fillna("").astype(str)
+df["Estado"] = df["Estado"].fillna("").astype(str)
 df["Endereco"] = df["Cidade"] + ", " + df["Estado"]
 
 # ── Geolocalização com cache ────────────────────────────────────────────
