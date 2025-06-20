@@ -9,22 +9,6 @@ from utils.jira_api import JiraAPI
 # ── Configuração da página ─────────────────────────────────────────────
 st.set_page_config(page_title="Mapa de Chamados - Spare", layout="wide")
 
-# ── Autenticação ───────────────────────────────────────────────────────
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
-
-if not st.session_state.authenticated:
-    st.title("🔒 Login Necessário")
-    user = st.text_input("Usuário")
-    pwd  = st.text_input("Senha", type="password")
-    if st.button("Entrar"):
-        if user.strip() == "admwt" and pwd.strip() == "suporte#wt2025":
-            st.session_state.authenticated = True
-            st.success("Bem-vindo!")
-        else:
-            st.error("Credenciais inválidas")
-    st.stop()
-
 # ── Conectar ao Jira ────────────────────────────────────────────────────
 jira = JiraAPI(
     st.secrets["EMAIL"],
